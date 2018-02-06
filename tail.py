@@ -32,22 +32,24 @@ class TailFollow() :
         self.last_read = []
         self._stop = False
 
-    async def watch_async(self, loop : asyncio.AbstractEventLoop) :
-        self.last_filesize = os.path.getsize(self.filepath)
+    def on_changed(self, loop : asyncio.AbstractEventLoop):
+        current_filesize = os.path.getsize(self.filepath)
 
-        def on_changed(ev):
-            current_filesize = os.path.getsize(self.filepath)
+        if current_filesize > self.last_filesize:
+            with open(self.filepath) as f:
+                f.seek(self.last_filesize)
+                self.last_read = f.readlines()
 
-            if current_filesize > self.last_filesize:
-                with open(self.filepath) as f:
-                    f.seek(self.last_filesize)
-                    self.last_read = f.readlines()
+            self.last_filesize = current_filesize
+            loop.call_soon_threadsafe(self.async_event.set)
 
-                self.last_filesize = current_filesize
-                loop.call_soon_threadsafe(self.async_event.set)
+    async def watch_async(self, loop : asyncio.AbstractEventLoop, start_position:int = -1) :
+        if start_position == -1:
+            self.last_filesize = os.path.getsize(self.filepath)
+        else :
+            self.last_filesize = start_position
 
-
-        handler = ChangeDetectionHandler(on_changed, self.filepath)
+        handler = ChangeDetectionHandler(lambda ev:self.on_changed(loop), self.filepath)
         observer = watchdog.observers.Observer()
         observer.schedule(handler, self.basepath, recursive=True)
 
@@ -64,6 +66,7 @@ class TailFollow() :
                 do_stop = yield line
                 if do_stop :
                     self._stop = True
+                    break
             self.last_read = []
 
             if self._stop :
@@ -72,7 +75,7 @@ class TailFollow() :
         observer.stop()
 
     def watch_stop(self):
-        self._stop
+        self._stop = True
         self.async_event.set()
 
 def tail_file(f:io.IOBase, linenum:int, read_to:int = 0, encoding:str='utf-8', retry_count:int = 0) -> [str]:
@@ -114,9 +117,43 @@ async def tailwatch(filename, loop):
     try:
         async for line in follow.watch_async(loop) :
             sys.stdout.write(line)
-    except ex:
+    except Exception as ex:
         loop.stop()
         raise ex
+
+async def tailwatch_test(filename, loop):
+    zun_cnt = 0
+    follow = TailFollow(filename)
+    try:
+        async for line in follow.watch_async(loop) :
+            sys.stdout.write(line)
+            if line.strip() == 'ずん' : zun_cnt += 1
+            elif line.strip() == 'どこ' and zun_cnt >=4:
+                await asyncio.sleep(0.5)
+                sys.stdout.write('')
+                sys.stdout.write('\rキ')
+                await asyncio.sleep(0.2)
+                sys.stdout.write('\rキ・ヨ')
+                await asyncio.sleep(0.2)
+                sys.stdout.write('\rキ・ヨ・シ！\n')
+                follow.watch_stop()
+                break
+            else:
+                zun_cnt = 0
+    except Exception as ex:
+        loop.stop()
+        raise ex
+
+async def delay_exec(sec, func):
+    await asyncio.sleep(sec)
+    func()
+
+async def gen_testfile(filename):
+    import random
+    while True:
+        with open(filename, 'a') as f:
+            f.write('%s\n' % ['ずん','どこ'][random.randint(0,1)])
+        await asyncio.sleep(0.3)
 
 def main():
     print('\n'.join(tail('testfile10.txt', 10)))
@@ -124,8 +161,13 @@ def main():
     basedir = os.path.abspath(os.path.dirname(__file__))
 
     loop = asyncio.get_event_loop()
-    asyncio.ensure_future(tailwatch(os.path.join(basedir, 'testfile_append.txt'), loop))
-    loop.run_forever()
+
+    asyncio.ensure_future(gen_testfile(os.path.join(basedir, 'testfile_append.txt')))
+
+    loop.run_until_complete(tailwatch_test(os.path.join(basedir, 'testfile_append.txt'), loop))
+    # asyncio.ensure_future(delay_exec(5, lambda: loop.stop()))
+
+    #loop.run_forever()
 
 if __name__ == '__main__':
     main()
