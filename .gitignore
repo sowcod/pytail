@@ -1,3 +1,5 @@
 *.txt
 *.swp
+/.vscode
 /env
+__pycache__
